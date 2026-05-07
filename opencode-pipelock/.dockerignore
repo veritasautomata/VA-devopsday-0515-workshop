@@ -1,0 +1,9 @@
+# Don't ship the workspace into the image — it's bind-mounted at runtime.
+workspace/
+# Secrets must never enter the image layers.
+.env
+.env.*
+!.env.example
+# Logs, junk.
+*.log
+.DS_Store
