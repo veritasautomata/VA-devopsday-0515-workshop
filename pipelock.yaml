@@ -1,0 +1,138 @@
+# Pipelock config for opencode + opencode zen
+# Mode: balanced (block obvious exfil, detect sophisticated, allow web browsing
+# via the fetch proxy). Switch enforce: false for an audit-only dry run.
+
+version: 1
+mode: balanced
+enforce: true
+
+# Domains the agent is allowed to reach via direct HTTP(S) (i.e. when it
+# uses HTTP_PROXY=http://pipelock:8888 as a forward proxy). Anything not on
+# this list is blocked at the proxy.
+api_allowlist:
+  # opencode zen — the LLM gateway. /chat/completions and /messages live here.
+  - "opencode.ai"
+  - "*.opencode.ai"
+
+  # Package registries — needed for `bun install`, npm, pip, etc. inside the
+  # agent container during normal coding work.
+  - "registry.npmjs.org"
+  - "*.npmjs.org"
+  - "registry.yarnpkg.com"
+  - "pypi.org"
+  - "*.pypi.org"
+  - "files.pythonhosted.org"
+  - "*.pythonhosted.org"
+
+  # Source code hosts — clone, pull, push.
+  - "github.com"
+  - "*.github.com"
+  - "githubusercontent.com"
+  - "*.githubusercontent.com"
+  - "codeload.github.com"
+
+  # Go module proxy + checksum DB (only relevant if you write Go).
+  - "proxy.golang.org"
+  - "sum.golang.org"
+
+  # Crates.io for Rust.
+  - "crates.io"
+  - "static.crates.io"
+
+# Fetch-proxy settings: this is the /fetch?url=... endpoint pipelock exposes
+# for content browsing. Scanners listed below run on every fetched page.
+fetch_proxy:
+  listen: "0.0.0.0:8888"
+  timeout_seconds: 30
+  max_response_mb: 10
+  user_agent: "Pipelock-Fetch/1.0 (+opencode)"
+  monitoring:
+    entropy_threshold: 4.5
+    max_url_length: 2048
+    max_requests_per_minute: 60
+    # Domains that exfil tooling commonly abuses. Block list, not allowlist —
+    # these are blocked even if the URL otherwise looks innocuous.
+    blocklist:
+      - "*.pastebin.com"
+      - "pastebin.com"
+      - "*.transfer.sh"
+      - "transfer.sh"
+      - "*.requestbin.com"
+      - "*.webhook.site"
+      - "*.ngrok.io"
+      - "*.ngrok-free.app"
+      - "*.beeceptor.com"
+
+# DLP: scan outbound URLs and POST bodies for credential patterns.
+dlp:
+  scan_env: true   # also redact values of the proxy's own env vars
+  patterns:
+    - name: "Anthropic API Key"
+      regex: 'sk-ant-[a-zA-Z0-9\-_]{20,}'
+      severity: critical
+    - name: "OpenAI API Key"
+      regex: 'sk-[a-zA-Z0-9]{32,}'
+      severity: critical
+    - name: "OpenCode Zen Key"
+      regex: 'sk-opencode-[a-zA-Z0-9\-_]{20,}'
+      severity: critical
+    - name: "AWS Access Key"
+      regex: 'AKIA[0-9A-Z]{16}'
+      severity: critical
+    - name: "GitHub Token"
+      regex: 'gh[pousr]_[A-Za-z0-9]{36,}'
+      severity: critical
+    - name: "Generic Bearer Token (long, high entropy)"
+      regex: 'Bearer\s+[A-Za-z0-9\-_\.]{40,}'
+      severity: high
+    - name: "Private Key Header"
+      regex: '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+      severity: critical
+
+# Response scanning: scan content fetched via /fetch for prompt injection
+# before it reaches opencode. Same scanner runs on MCP responses when you
+# wrap MCP servers with `pipelock mcp proxy`.
+response_scanning:
+  enabled: true
+  action: block   # block | strip | warn — block is the right default for
+                  # unattended agent use; switch to "warn" while tuning.
+  patterns:
+    - name: "Prompt Injection — instruction override"
+      regex: '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
+      severity: high
+    - name: "Prompt Injection — system role override"
+      regex: '(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(a\s+)?(different|new|admin|root|system)'
+      severity: high
+    - name: "Jailbreak — DAN / dev mode"
+      regex: '(?i)(DAN\s+mode|developer\s+mode|jailbreak|unrestricted\s+mode)'
+      severity: medium
+    - name: "Tool-call injection in fetched content"
+      regex: '(?i)<\s*(tool_call|function_call|use_tool)\s*>'
+      severity: high
+
+# Audit log — JSON to stdout (captured by docker logs). Pipe to a SIEM if you
+# care.
+logging:
+  format: json
+  output: stdout
+  include_allowed: true
+  include_blocked: true
+
+# SSRF protection: pipelock will refuse to fetch URLs that resolve into these
+# ranges, preventing the agent from probing internal infrastructure.
+internal:
+  - "127.0.0.0/8"
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+  - "169.254.0.0/16"   # AWS/GCP metadata
+  - "::1/128"
+  - "fc00::/7"
+  - "fe80::/10"
+
+# Optional: block opencode from pushing to non-feature branches if you also
+# run `pipelock git install-hooks` inside the workspace.
+git_protection:
+  enabled: false
+  allowed_branches: ["feature/*", "fix/*", "chore/*"]
+  pre_push_scan: true

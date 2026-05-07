@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "_comment_provider": "opencode zen is the default; OPENCODE_API_KEY is read from the agent container env.",
+
+  "_comment_mcp": "Every MCP server is wrapped in `pipelock mcp proxy` so server responses are scanned for prompt injection before reaching the model. The pipelock binary must be on PATH inside the agent container — see the install step in docker-compose.yaml. Add more servers below following the same pattern.",
+  "mcp": {
+    "filesystem": {
+      "type": "local",
+      "command": [
+        "pipelock", "mcp", "proxy",
+        "--config", "/etc/pipelock/pipelock.yaml",
+        "--",
+        "npx", "-y", "@modelcontextprotocol/server-filesystem", "/workspace"
+      ],
+      "enabled": true
+    }
+  },
+
+  "_comment_tools": "Disable opencode's built-in webfetch — the agent should fetch through pipelock's /fetch endpoint instead, which runs DLP + injection scanning. The model will be told how to use it via AGENTS.md.",
+  "tools": {
+    "webfetch": false
+  },
+
+  "_comment_share": "Disable session sharing so transcripts never leave the box.",
+  "share": "disabled"
+}
