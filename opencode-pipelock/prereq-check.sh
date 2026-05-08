@@ -90,10 +90,18 @@ else
 fi
 
 section "Optional: opencode zen API key"
+# If not already in env, try loading from a .env in the same directory as this script
+if [ -z "${OPENCODE_API_KEY:-}" ]; then
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$script_dir/.env" ]; then
+        # shellcheck disable=SC1091
+        set -a; source "$script_dir/.env"; set +a
+    fi
+fi
 if [ -n "${OPENCODE_API_KEY:-}" ]; then
-    ok "OPENCODE_API_KEY is set in your environment"
+    ok "OPENCODE_API_KEY is set (found in .env or environment)"
 else
-    warn "OPENCODE_API_KEY not in env — that's fine, you'll paste it into .env at the workshop. Get one at https://opencode.ai/zen"
+    warn "OPENCODE_API_KEY not set — paste it into .env before the workshop. Get one at https://opencode.ai/zen"
 fi
 
 echo

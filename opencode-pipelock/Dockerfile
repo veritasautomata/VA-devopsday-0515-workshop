@@ -24,7 +24,7 @@ ENV CGO_ENABLED=0 \
 RUN go install "github.com/luckyPipewrench/pipelock/cmd/pipelock@${PIPELOCK_VERSION}"
 
 # ----- stage 2: runtime ---------------------------------------------------
-FROM oven/bun:1-alpine
+FROM oven/bun:1-debian
 
 # Pin opencode the same way. Use `latest` only if you genuinely want
 # unattended upgrades on every rebuild.
@@ -38,7 +38,7 @@ ARG OPENCODE_VERSION=latest
 #   - curl, jq:        AGENTS.md tells the model to use these for the
 #                      pipelock fetch endpoint
 #   - openssh-client:  git over ssh, if you mount an ssh key in
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
         nodejs \
@@ -46,15 +46,17 @@ RUN apk add --no-cache \
         curl \
         jq \
         openssh-client \
-    && rm -rf /var/cache/apk/*
+    && rm -rf /var/lib/apt/lists/*
 
 # Bring in the pipelock binary from the builder stage.
 COPY --from=pipelock-builder /go/bin/pipelock /usr/local/bin/pipelock
 
 # Sanity check at build time. If this fails the image fails — better than
 # discovering it the first time the agent tries to launch an MCP server.
-RUN pipelock version && opencode --version || \
-    bun install -g "opencode-ai@${OPENCODE_VERSION}"
+RUN bun install -g "opencode-ai@${OPENCODE_VERSION}" \
+    && npm install -g @modelcontextprotocol/server-filesystem \
+    && pipelock version \
+    && opencode --version
 
 # Pipelock config lives at a stable path. The compose file mounts the same
 # pipelock.yaml here read-only so the agent and the pipelock container

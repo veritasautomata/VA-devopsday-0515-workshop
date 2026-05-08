@@ -31,8 +31,7 @@ Pass an `X-Pipelock-Agent: opencode` header so audit logs are attributed
 correctly:
 
 ```sh
-curl -s -H "X-Pipelock-Agent: opencode" \
-  "http://pipelock:8888/fetch?url=$URL"
+curl -s -H "X-Pipelock-Agent: opencode" "http://pipelock:8888/fetch?url=$URL"
 ```
 
 If `blocked` is `true`, do not retry with a different URL trying to evade

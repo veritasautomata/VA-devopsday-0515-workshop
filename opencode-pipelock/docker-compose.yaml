@@ -32,7 +32,7 @@ services:
     ports:
       - "127.0.0.1:8888:8888"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8888/health"]
+      test: ["CMD", "/pipelock", "healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -55,11 +55,19 @@ services:
     working_dir: /workspace
     # Drop into a shell. Run `opencode` from there, or use
     # `docker compose run --rm agent opencode` to launch the TUI directly.
-    command: ["sh"]
+    command:
+      - sh
+      - -c
+      - |
+        if [ -z "$OPENCODE_API_KEY" ]; then
+          echo "ERROR: OPENCODE_API_KEY is not set. Add it to .env and restart."
+          exit 1
+        fi
+        exec sh
     stdin_open: true
     tty: true
     environment:
-      OPENCODE_API_KEY: ${OPENCODE_API_KEY:?set OPENCODE_API_KEY in .env}
+      OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
       # Make HTTP-aware clients (curl, wget, Node/Bun fetch) route through
       # pipelock. This is belt-and-suspenders — the network-level isolation
       # below is what actually enforces the boundary.

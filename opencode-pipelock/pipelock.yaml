@@ -39,6 +39,11 @@ api_allowlist:
   - "crates.io"
   - "static.crates.io"
 
+# Forward proxy: handles CONNECT tunnels from HTTPS_PROXY-aware clients
+# (opencode, npm, curl -x). Only domains on api_allowlist get through.
+forward_proxy:
+  enabled: true
+
 # Fetch-proxy settings: this is the /fetch?url=... endpoint pipelock exposes
 # for content browsing. Scanners listed below run on every fetched page.
 fetch_proxy:
@@ -99,16 +104,12 @@ response_scanning:
   patterns:
     - name: "Prompt Injection — instruction override"
       regex: '(?i)(ignore|disregard|forget)\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)'
-      severity: high
     - name: "Prompt Injection — system role override"
       regex: '(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(a\s+)?(different|new|admin|root|system)'
-      severity: high
     - name: "Jailbreak — DAN / dev mode"
       regex: '(?i)(DAN\s+mode|developer\s+mode|jailbreak|unrestricted\s+mode)'
-      severity: medium
     - name: "Tool-call injection in fetched content"
       regex: '(?i)<\s*(tool_call|function_call|use_tool)\s*>'
-      severity: high
 
 # Audit log — JSON to stdout (captured by docker logs). Pipe to a SIEM if you
 # care.

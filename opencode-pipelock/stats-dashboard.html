@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Pipelock — Live Dashboard</title>
+  <style>
+    :root {
+      --bg:      #101114;
+      --panel:   #1b1d22;
+      --border:  rgba(255,255,255,0.08);
+      --text:    #f5f5f5;
+      --muted:   #a8adb7;
+      --accent:  #ffd166;
+      --blocked: #ff6b6b;
+      --allowed: #63e6be;
+      --tunnel:  #74c0fc;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px;
+      min-height: 100vh;
+    }
+
+    /* ── header ── */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .header-left { display: flex; align-items: baseline; gap: 20px; }
+
+    h1 { font-size: 48px; letter-spacing: -0.03em; line-height: 1; }
+
+    .badge {
+      font-size: 18px;
+      font-weight: 600;
+      padding: 4px 14px;
+      border-radius: 999px;
+      border: 2px solid var(--border);
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .badge.healthy  { color: var(--allowed); border-color: var(--allowed); }
+    .badge.unhealthy { color: var(--blocked); border-color: var(--blocked); }
+    .badge.mode     { color: var(--accent);  border-color: var(--accent); }
+
+    #updated {
+      color: var(--muted);
+      font-size: 22px;
+      white-space: nowrap;
+    }
+
+    /* ── big stat cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 20px 24px 22px;
+      border: 2px solid var(--border);
+    }
+
+    .card-label {
+      color: var(--muted);
+      font-size: 18px;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .card-value {
+      font-size: 52px;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.02em;
+    }
+
+    .card-value.blocked { color: var(--blocked); }
+    .card-value.allowed { color: var(--allowed); }
+    .card-value.tunnel  { color: var(--tunnel); }
+    .card-value.rate    { color: var(--accent); }
+
+    /* ── lower panels ── */
+    .panels {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 1100px) {
+      .panels { grid-template-columns: 1fr 1fr; }
+    }
+
+    .panel {
+      background: var(--panel);
+      border-radius: 18px;
+      padding: 22px 24px;
+      border: 2px solid var(--border);
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+
+    .panel.changed {
+      border-color: var(--accent);
+      box-shadow: 0 0 28px rgba(255, 209, 102, 0.3);
+    }
+
+    .panel-title {
+      font-size: 18px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 16px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    td {
+      padding: 8px 0;
+      font-size: 26px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tr:last-child td { border-bottom: none; }
+
+    td:last-child {
+      text-align: right;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 22px;
+    }
+
+    /* agent sub-rows */
+    .agent-name { color: var(--accent); font-size: 22px; }
+    .agent-stats { font-size: 20px; color: var(--muted); }
+    .agent-num-allowed { color: var(--allowed); font-weight: 700; }
+    .agent-num-blocked { color: var(--blocked); font-weight: 700; }
+    .agent-num-tunnels { color: var(--tunnel);  font-weight: 700; }
+
+    .agent-row td { border-bottom: 1px solid var(--border); padding: 10px 0; vertical-align: top; }
+    .agent-row:last-child td { border-bottom: none; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <h1>Pipelock</h1>
+      <span class="badge mode" id="badge-mode">…</span>
+      <span class="badge" id="badge-health">…</span>
+    </div>
+    <div id="updated">Connecting…</div>
+  </header>
+
+  <section class="cards">
+    <div class="card">
+      <div class="card-label">Total requests</div>
+      <div class="card-value" id="val-total">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Blocked</div>
+      <div class="card-value blocked" id="val-blocked">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Allowed</div>
+      <div class="card-value allowed" id="val-allowed">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Tunnels</div>
+      <div class="card-value tunnel" id="val-tunnels">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Block rate</div>
+      <div class="card-value rate" id="val-rate">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Uptime</div>
+      <div class="card-value" id="val-uptime">—</div>
+    </div>
+  </section>
+
+  <section class="panels">
+
+    <div class="panel" id="panel-domains">
+      <div class="panel-title">Top blocked domains</div>
+      <table id="tbl-domains"><tr><td class="empty">No data yet</td></tr></table>
+    </div>
+
+    <div class="panel" id="panel-scanners">
+      <div class="panel-title">Triggered scanners</div>
+      <table id="tbl-scanners"><tr><td class="empty">No blocks yet</td></tr></table>
+    </div>
+
+    <div class="panel" id="panel-agents">
+      <div class="panel-title">Agents</div>
+      <table id="tbl-agents"><tr><td class="empty">No traffic yet</td></tr></table>
+    </div>
+
+  </section>
+
+  <script>
+    const STATS_URL  = "/stats";
+    const HEALTH_URL = "/health";
+    const REFRESH_MS = 2000;
+
+    function $(id) { return document.getElementById(id); }
+
+    function fmt(n) {
+      if (n === null || n === undefined) return "—";
+      return Number(n).toLocaleString();
+    }
+
+    function fmtUptime(seconds) {
+      if (!seconds && seconds !== 0) return "—";
+      const s = Math.floor(seconds);
+      if (s < 60)   return `${s}s`;
+      if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      return `${h}h ${m}m`;
+    }
+
+    function fmtRate(r) {
+      if (r === null || r === undefined) return "—";
+      return (r * 100).toFixed(1) + "%";
+    }
+
+    function flash(panelId) {
+      const el = $(panelId);
+      if (!el) return;
+      el.classList.add("changed");
+      setTimeout(() => el.classList.remove("changed"), 700);
+    }
+
+    function domainRows(list) {
+      if (!list || list.length === 0) return `<tr><td class="empty">None yet</td></tr>`;
+      return list.map(d => `
+        <tr>
+          <td>${d.name ?? "?"}</td>
+          <td class="blocked">${fmt(d.count)}</td>
+        </tr>`).join("");
+    }
+
+    function scannerRows(list) {
+      if (!list || list.length === 0) return `<tr><td class="empty">No blocks yet</td></tr>`;
+      return list.map(s => `
+        <tr>
+          <td>${s.name ?? "?"}</td>
+          <td class="blocked">${fmt(s.count)}</td>
+        </tr>`).join("");
+    }
+
+    function agentRows(agents) {
+      if (!agents || Object.keys(agents).length === 0)
+        return `<tr><td class="empty">No traffic yet</td></tr>`;
+      return Object.entries(agents).map(([name, v]) => `
+        <tr class="agent-row">
+          <td>
+            <div class="agent-name">${name}</div>
+            <div class="agent-stats">
+              <span class="agent-num-allowed">${fmt(v.allowed)} allowed</span>
+              &nbsp;·&nbsp;
+              <span class="agent-num-blocked">${fmt(v.blocked)} blocked</span>
+              &nbsp;·&nbsp;
+              <span class="agent-num-tunnels">${fmt(v.tunnels)} tunnels</span>
+            </div>
+          </td>
+        </tr>`).join("");
+    }
+
+    // Track previous JSON strings for flash-on-change
+    const prev = { domains: "", scanners: "", agents: "" };
+
+    async function refreshStats() {
+      try {
+        const res  = await fetch(STATS_URL, { cache: "no-store" });
+        const data = await res.json();
+
+        $("val-total").textContent   = fmt(data.requests?.total);
+        $("val-blocked").textContent = fmt(data.requests?.blocked);
+        $("val-allowed").textContent = fmt(data.requests?.allowed);
+        $("val-tunnels").textContent = fmt(data.tunnels);
+        $("val-rate").textContent    = fmtRate(data.requests?.block_rate);
+        $("val-uptime").textContent  = fmtUptime(data.uptime_seconds);
+
+        const domainsStr  = JSON.stringify(data.top_blocked_domains);
+        const scannersStr = JSON.stringify(data.top_scanners);
+        const agentsStr   = JSON.stringify(data.agents);
+
+        if (domainsStr  !== prev.domains)  { flash("panel-domains");  prev.domains  = domainsStr; }
+        if (scannersStr !== prev.scanners) { flash("panel-scanners"); prev.scanners = scannersStr; }
+        if (agentsStr   !== prev.agents)   { flash("panel-agents");   prev.agents   = agentsStr; }
+
+        $("tbl-domains").innerHTML  = domainRows(data.top_blocked_domains);
+        $("tbl-scanners").innerHTML = scannerRows(data.top_scanners);
+        $("tbl-agents").innerHTML   = agentRows(data.agents);
+
+        $("updated").innerHTML =
+          `<span style="color:var(--allowed)">Live</span> · ${new Date().toLocaleTimeString()}`;
+
+      } catch (err) {
+        $("updated").innerHTML =
+          `<span style="color:var(--blocked)">Offline</span> · ${new Date().toLocaleTimeString()}`;
+      }
+    }
+
+    async function refreshHealth() {
+      try {
+        const res  = await fetch(HEALTH_URL, { cache: "no-store" });
+        const data = await res.json();
+
+        const modeEl   = $("badge-mode");
+        const healthEl = $("badge-health");
+
+        modeEl.textContent  = data.mode ?? "unknown";
+        modeEl.className    = "badge mode";
+
+        const healthy = data.status === "healthy";
+        healthEl.textContent = data.status ?? "unknown";
+        healthEl.className   = "badge " + (healthy ? "healthy" : "unhealthy");
+
+      } catch {
+        $("badge-health").textContent = "offline";
+        $("badge-health").className   = "badge unhealthy";
+      }
+    }
+
+    refreshStats();
+    refreshHealth();
+    setInterval(refreshStats,  REFRESH_MS);
+    setInterval(refreshHealth, 5000);
+  </script>
+</body>
+</html>

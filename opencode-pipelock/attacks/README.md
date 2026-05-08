@@ -30,7 +30,7 @@ sh 03-entropy.sh
 Open a second terminal on the host and tail the audit log:
 
 ```sh
-docker compose logs -f pipelock | jq 'select(.blocked == true)'
+docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'
 ```
 
 You'll see one JSON line per blocked request, with the rule that triggered, the source identifier (the `X-Pipelock-Agent` header), and the URL.
