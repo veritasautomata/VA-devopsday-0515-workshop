@@ -53,6 +53,8 @@ opencode
 To bump pipelock or opencode, edit the `args:` under `agent.build` in
 `docker-compose.yaml` and run `docker compose build --no-cache agent`.
 
+---
+
 ## Verify pipelock is up (from the host)
 
 Pipelock exposes a health and stats API on `127.0.0.1:8888`.
@@ -77,6 +79,8 @@ Expected health response:
   "response_scan_enabled": true
 }
 ```
+
+---
 
 ## Seeing pipelock in action with opencode
 
@@ -119,6 +123,8 @@ To see only blocked requests:
 docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'
 ```
 
+---
+
 ## Fetching web content through pipelock
 
 The agent container has no direct internet access. opencode fetches pages
@@ -128,6 +134,7 @@ scanning before returning content to the model.
 > **Address quick reference:**
 > - From the **host**: `http://127.0.0.1:8888` (port-forwarded)
 > - From **inside the agent container**: `http://pipelock:8888` (internal network)
+>
 > `127.0.0.1` inside the container is the container's own loopback — pipelock is not there.
 
 ```sh
@@ -161,6 +168,8 @@ curl -s "http://127.0.0.1:8888/fetch?url=https://pastebin.com/raw/test" | jq .
 curl -s "http://pipelock:8888/fetch?url=https://pastebin.com/raw/test" | jq .
 ```
 
+---
+
 ## DLP: pipelock catching a credential in a request URL
 
 Pipelock scans the full URL of outbound requests for credential patterns.
@@ -185,56 +194,144 @@ You should see `403 Forbidden`. Confirm it in the stats:
 curl -s http://127.0.0.1:8888/stats | jq '.top_scanners'
 ```
 
-## Response scanning and MCP scanning
+---
 
-Pipelock scans two things for prompt-injection content:
+## MCP response scanning demo
 
-1. **Fetch proxy responses** — anything returned by `GET /fetch?url=...` is
-   scanned before the content reaches the model.
-2. **MCP tool responses** — when opencode calls a tool on the wrapped MCP
-   server (`pipelock mcp proxy`), pipelock intercepts the server's response
-   and scans it before the model sees it.
+This is the clearest way to show pipelock intercepting a prompt injection
+before it reaches the model.
 
-### Demoing fetch response scanning
+`attacks/demo-mcp-server.js` is a minimal MCP server with one tool:
+`get_project_notes`. The response looks like normal project notes but contains
+an injected payload buried in the content — simulating a poisoned database
+record, shared doc, or search result. It is pre-configured in `opencode.json`
+as the `demo-notes` MCP server, wrapped in `pipelock mcp proxy`. opencode must
+call the MCP tool to get the data — it cannot read it any other way.
 
-To see the scanner fire, fetch a public URL whose content matches an injection
-pattern. Any URL that returns text containing `ignore all previous instructions`
-(or the other patterns in `pipelock.yaml`) will trigger it.
-
-If you have a GitHub Gist or any public URL with that text, from inside the
-agent container:
+**Terminal 1 (host) — watch for the block:**
 
 ```sh
-curl -s "http://pipelock:8888/fetch?url=https://YOUR_URL_HERE" | jq .
+docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'
 ```
 
-You will see `"blocked": true` in the JSON response and a blocked event in the
-pipelock log.
+**Terminal 2 — inside the agent container, run opencode and say:**
 
-### Why asking opencode to read evil.txt doesn't demo pipelock
+> "Use the get_project_notes tool and summarize what it returns."
 
-When you ask opencode to read a local file, it uses its built-in Read tool —
-a direct syscall that never touches pipelock. The MCP layer is only involved
-when opencode invokes an MCP tool explicitly. For local files, opencode prefers
-its native tools.
+Pipelock intercepts the MCP response before the model sees it. You will see a
+blocked event in Terminal 1 and opencode will report that the tool response was
+rejected.
 
-Separately: opencode's model will often recognize and refuse an obvious
-injection string on its own — which is the right outcome, but it's the model's
-judgment at work, not pipelock. Pipelock's scanning is a second, independent
-layer for when the model's judgment fails or is bypassed.
+### Why this works where reading a local file doesn't
 
-### What MCP scanning actually protects
+When opencode reads a local file it uses its own built-in Read tool — a direct
+syscall that bypasses MCP entirely. The `pipelock mcp proxy` wrapper only fires
+when opencode calls an MCP tool. With `demo-notes`, the only path to the data
+is the MCP tool, so pipelock always intercepts it.
 
-The `pipelock mcp proxy` wrapper is most useful for MCP servers that fetch
-external content — e.g. a web-search MCP server or a database MCP server
-that returns user-controlled data. It intercepts the raw response from the
-upstream server before the model processes it, providing a defense-in-depth
-layer that doesn't depend on model behavior.
+### What this threat model represents
+
+A real attacker doesn't put `ignore all previous instructions` in a file on the
+developer's laptop. They poison data that flows through an MCP server the agent
+trusts — a database record, a search result, a shared team document. Pipelock's
+MCP proxy scans those responses before the model processes them, independent of
+whether the model would have caught it on its own.
+
+---
+
+## Wrapping your own MCP server
+
+Any MCP server that reads from a database, API, or search index can return
+injected instructions or PII. Wrapping it in `pipelock mcp proxy` routes every
+tool response through pipelock's scanner before the model sees it.
+
+**Before — unprotected:**
+
+```json
+{
+  "mcp": {
+    "my-crm": {
+      "type": "local",
+      "command": ["node", "/workspace/crm-server.js"]
+    }
+  }
+}
+```
+
+**After — wrapped:**
+
+```json
+{
+  "mcp": {
+    "my-crm": {
+      "type": "local",
+      "command": [
+        "pipelock", "mcp", "proxy",
+        "--config", "/etc/pipelock/pipelock.yaml", "--",
+        "node", "/workspace/crm-server.js"
+      ]
+    }
+  }
+}
+```
+
+The `--` separates pipelock's flags from the original server command. The
+wrapper intercepts stdio between opencode and the server and scans every
+`tools/call` response for injection patterns and PII before forwarding it.
+
+> **Important:** each MCP server needs its own wrapper. Wrapping one server
+> doesn't protect the others. The included `opencode.json` wraps both the
+> filesystem server and the `demo-notes` server — use those as a template.
+
+The pipelock binary is already on PATH inside the agent container (baked in
+by the Dockerfile). The config is bind-mounted from the host at
+`/etc/pipelock/pipelock.yaml` so both containers always share the same policy.
+
+---
+
+## PII redaction in MCP responses
+
+Pipelock can strip or block PII before it reaches the model. The included
+config already covers credit cards, SSNs, and email addresses in both DLP
+(outbound requests) and response scanning (inbound MCP tool responses).
+
+**Run the demo from inside the agent container:**
+
+```sh
+cd /workspace/attacks && sh 05-pii-redaction.sh
+```
+
+The script shows:
+- A fake customer record from a CRM tool containing a credit card, email, and SSN
+- What pipelock's scanner catches (pattern name, matched text, byte position)
+- What the model would receive in `strip` mode (PII redacted, record intact)
+- How to write a custom pattern for any PII type you care about
+
+**To add your own PII patterns**, edit `pipelock.yaml`:
+
+```yaml
+response_scanning:
+  patterns:
+    - name: "PII — UK NI Number"
+      regex: '\b[A-Z]{2}[0-9]{6}[A-D ]\b'
+```
+
+Then reload without restarting:
+
+```sh
+docker kill --signal SIGHUP pipelock
+```
+
+See `pii-custom-rules.md` for a full pattern library covering financial,
+identity, contact, and healthcare PII — plus guidance on tuning for false
+positives.
+
+---
 
 ## Hands-on attack scenarios
 
-Three scripts in `attacks/` try to exfiltrate a fake secret through pipelock.
-Each one is supposed to fail. Run them from inside the agent container:
+Six scenarios in `attacks/` demonstrate pipelock's defenses. Run the shell
+scripts from inside the agent container; the MCP demo runs via opencode.
 
 ```sh
 docker compose run --rm agent
@@ -243,9 +340,18 @@ cd /workspace/attacks
 sh 01-blocklist.sh   # naive curl to pastebin — blocked by domain list
 sh 02-dlp.sh         # credential in URL param — blocked by DLP regex
 sh 03-entropy.sh     # base64-encoded blob — blocked by entropy threshold
+sh 04-redaction.sh   # scanner visibility, strip vs block, attack scorecard
+sh 05-pii-redaction.sh  # PII in MCP response — credit card, SSN, email caught
 ```
 
-Watch each block land in real time on the host:
+> **Note:** use `sh scriptname.sh`, not `./scriptname.sh`. The `attacks/` directory is
+> bind-mounted read-only (`:ro`) so scripts can't be made executable inside the container.
+
+For the MCP injection scenario, stay in opencode and say:
+
+> "Use the get_project_notes tool and summarize what it returns."
+
+Watch every block land in real time on the host:
 
 ```sh
 docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'
@@ -254,15 +360,70 @@ docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'
 See `attacks/README.md` for bypass ideas and what each defense actually
 proves (and doesn't).
 
+---
+
+## pipelock simulate — attack scorecard
+
+`pipelock simulate` runs **24 synthetic attack scenarios** against your `pipelock.yaml`
+config and prints a scored report. It covers DLP credential leaks, prompt injection,
+tool poisoning, SSRF, and URL evasion techniques. Use it to verify your config actually
+catches what you think it catches, and to spot gaps before they matter.
+
+Run it from the **host** against the pipelock container (not from inside the agent):
+
+```sh
+docker exec pipelock /pipelock simulate --config /config/pipelock.yaml
+```
+
+Example output:
+
+```
+pipelock attack simulation — 24 scenarios
+==========================================
+  DLP / credential leak       6/6   ✓
+  Prompt injection            5/6   ✗  MISSED: encoded-payload-base64
+  Tool poisoning              4/4   ✓
+  SSRF / metadata             5/5   ✓
+  URL evasion                 3/3   ✓
+------------------------------------------
+  Total                      23/24
+  Grade: A
+```
+
+Any **MISSED** scenario shows a gap in the current ruleset. Tighten the patterns in
+`pipelock.yaml` and re-run to watch the score improve. The command exits non-zero if
+any scenario is missed, so it can be wired into CI.
+
+---
+
+## Live stats dashboard
+
+A projector-friendly dashboard polls `/health` and `/stats` every two seconds
+and displays counts, blocked domains, triggered scanners, and agent traffic.
+
+```sh
+python3 serve-dashboard.py        # serves on http://localhost:9999
+python3 serve-dashboard.py 8080   # custom port
+```
+
+Open `http://localhost:9999` in a browser. The script proxies the pipelock API
+through itself to avoid browser CORS errors — no browser extensions needed.
+
+---
+
 ## Stats snapshot after a session
 
-After running opencode for a few minutes, pull a stats summary:
+After running opencode for a few minutes, pull a summary from the host:
 
 ```sh
 curl -s http://127.0.0.1:8888/stats | jq '{total: .requests.total, blocked: .requests.blocked, allowed: .requests.allowed, tunnels: .tunnels, top_agents: .agents, top_scanners: .top_scanners}'
 ```
 
-The `agents` field shows traffic broken down by `X-Pipelock-Agent` header value — this is how you confirm opencode's traffic is actually flowing through the proxy and not going direct.
+The `agents` field shows traffic broken down by `X-Pipelock-Agent` header —
+this is how you confirm opencode's traffic is actually flowing through the
+proxy and not going direct.
+
+---
 
 ## What's protected
 
@@ -275,27 +436,30 @@ The `agents` field shows traffic broken down by `X-Pipelock-Agent` header value 
   link-local, or loopback ranges, even if requested via DNS rebinding.
 - **Naive secret leaks via URL** — DLP scans for known key formats; entropy
   scanner catches base64-encoded blobs in URL segments.
-- **Prompt injection in MCP responses** — the filesystem MCP server is
-  wrapped in `pipelock mcp proxy`, so anything it returns is scanned before
-  reaching the model.
+- **Prompt injection in MCP responses** — all MCP servers are wrapped in
+  `pipelock mcp proxy`, so responses are scanned for injection patterns before
+  the model sees them. This applies to both the filesystem server and the
+  `demo-notes` server; add the same wrapper to any MCP server you add.
 
 **Moderate:**
 
-- **Sophisticated exfil** — a determined attacker who controls the model
-  could chunk, encrypt, and dribble data through allowed endpoints
-  (github.com gists, npm publish, …). Pipelock's rate limiter and entropy
-  scanner raise the bar but don't make this impossible.
+- **Sophisticated exfil** — a determined attacker who controls the model could
+  chunk, encrypt, and dribble data through allowed endpoints (github.com gists,
+  npm publish, …). Pipelock's rate limiter and entropy scanner raise the bar
+  but don't make this impossible.
 
 **Not protected:**
 
 - **Anything inside the container** — opencode has full read/write on
-  `/workspace` and `bun install` runs arbitrary npm postinstall scripts.
-  Run `pipelock integrity check ./workspace` from the host between sessions
-  if you care about file tampering.
+  `/workspace` and `bun install` runs arbitrary npm postinstall scripts. Run
+  `pipelock integrity check ./workspace` from the host between sessions if you
+  care about file tampering.
 - **Compromise of the LLM API itself** — if the response from opencode zen
-  contains malicious tool-calls, those execute inside the agent container.
-  The container drops capabilities and `no-new-privileges`, but it's not a
-  full sandbox.
+  contains malicious tool-calls, those execute inside the agent container. The
+  container drops capabilities and `no-new-privileges`, but it's not a full
+  sandbox.
+
+---
 
 ## Honest caveats
 
@@ -304,24 +468,26 @@ The `agents` field shows traffic broken down by `X-Pipelock-Agent` header value 
    widely audited. Read it yourself before trusting it with anything you
    actually care about.
 
-2. **The MCP wrapper assumes pipelock is on PATH inside the agent
-   container.** The included `Dockerfile` handles this — it builds pipelock
-   from source in a Go stage and copies the binary into the bun runtime.
-   `opencode.json`'s `mcp.filesystem.command` points at
-   `/etc/pipelock/pipelock.yaml`, which is bind-mounted from the host so
-   both containers share one config.
+2. **Every MCP server must be wrapped in `pipelock mcp proxy` individually.**
+   The included `opencode.json` does this for the filesystem and demo-notes
+   servers. If you add a new MCP server, wrap it the same way or its responses
+   won't be scanned. The pipelock binary is baked into the agent image by the
+   `Dockerfile` and the config is bind-mounted from the host so both containers
+   share one source of truth.
 
-3. **HTTP_PROXY only catches well-behaved clients.** opencode itself talks
-   to opencode.ai zen via Node's built-in fetch, which respects
-   `HTTPS_PROXY` — so that traffic does flow through pipelock. But native
-   binaries that ignore proxy env vars would not. The internal-network
-   constraint is what saves you, not the env vars.
+3. **HTTP_PROXY only catches well-behaved clients.** opencode itself talks to
+   opencode.ai zen via Node's built-in fetch, which respects `HTTPS_PROXY` —
+   so that traffic does flow through pipelock. But native binaries that ignore
+   proxy env vars would not. The internal-network constraint is what actually
+   enforces the boundary, not the env vars.
 
 4. **The fetch proxy and the egress proxy are the same listener.** Pipelock
    runs one HTTP server on `:8888` that handles both `GET /fetch?url=...`
    (content browsing for the agent) and forward-proxy CONNECT-style traffic
    from `HTTP_PROXY`. This is fine but worth knowing if you're reading the
    audit logs.
+
+---
 
 ## Quick reference
 
@@ -344,6 +510,12 @@ curl -s "http://127.0.0.1:8888/fetch?url=https://example.com" | jq .
 # Test DLP with a fake key — must use http:// (HTTPS tunnels hide URL params from DLP)
 curl -si -x http://127.0.0.1:8888 "http://github.com/x?key=sk-ant-api03-FAKEKEY1234567890abcdefghijklmnopqrstuvwxyz_PLACEHOLDER" | head -3
 
-# Reload pipelock config without restarting (note: forward_proxy changes require full restart)
+# Reload pipelock config without restarting (forward_proxy changes require full restart)
 docker kill --signal SIGHUP pipelock
+
+# Run 24 synthetic attacks against your config and get a scored report
+docker exec pipelock /pipelock simulate --config /config/pipelock.yaml
+
+# Launch the live stats dashboard
+python3 serve-dashboard.py
 ```

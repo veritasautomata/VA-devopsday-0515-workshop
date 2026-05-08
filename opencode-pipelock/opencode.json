@@ -10,6 +10,16 @@
         "npx", "@modelcontextprotocol/server-filesystem", "/workspace"
       ],
       "enabled": true
+    },
+    "demo-notes": {
+      "type": "local",
+      "command": [
+        "pipelock", "mcp", "proxy",
+        "--config", "/etc/pipelock/pipelock.yaml",
+        "--",
+        "node", "/workspace/attacks/demo-mcp-server.js"
+      ],
+      "enabled": true
     }
   },
   "tools": {

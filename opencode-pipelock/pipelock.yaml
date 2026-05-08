@@ -93,6 +93,16 @@ dlp:
     - name: "Private Key Header"
       regex: '-----BEGIN [A-Z ]*PRIVATE KEY-----'
       severity: critical
+    # PII — block the agent from leaking personal data in outbound requests
+    - name: "Credit Card Number"
+      regex: '\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b'
+      severity: high
+    - name: "US Social Security Number"
+      regex: '\b\d{3}[- ]\d{2}[- ]\d{4}\b'
+      severity: high
+    - name: "Email Address"
+      regex: '\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b'
+      severity: medium
 
 # Response scanning: scan content fetched via /fetch for prompt injection
 # before it reaches opencode. Same scanner runs on MCP responses when you
@@ -110,6 +120,13 @@ response_scanning:
       regex: '(?i)(DAN\s+mode|developer\s+mode|jailbreak|unrestricted\s+mode)'
     - name: "Tool-call injection in fetched content"
       regex: '(?i)<\s*(tool_call|function_call|use_tool)\s*>'
+    # PII — block MCP tool responses from surfacing personal data to the model
+    - name: "PII — Credit Card Number"
+      regex: '\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b'
+    - name: "PII — US Social Security Number"
+      regex: '\b\d{3}[- ]\d{2}[- ]\d{4}\b'
+    - name: "PII — Email Address"
+      regex: '\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b'
 
 # Audit log — JSON to stdout (captured by docker logs). Pipe to a SIEM if you
 # care.

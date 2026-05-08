@@ -76,6 +76,7 @@ services:
       NO_PROXY: localhost,127.0.0.1,pipelock
     volumes:
       - ./workspace:/workspace
+      - ./attacks:/workspace/attacks:ro
       - ./opencode.json:/root/.config/opencode/opencode.json:ro
       # The same pipelock.yaml is mounted into both containers so they
       # agree on the policy (pipelock enforces egress; the agent uses it
