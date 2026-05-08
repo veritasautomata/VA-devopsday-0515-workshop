@@ -3,7 +3,9 @@
 # via the fetch proxy). Switch enforce: false for an audit-only dry run.
 
 version: 1
-mode: balanced
+mode: strict    # strict = only allowlisted domains get through the forward proxy.
+                # balanced = monitors + blocklist only (allows general web traffic).
+                # Use strict for the workshop so the allowlist is actually enforced.
 enforce: true
 
 # Domains the agent is allowed to reach via direct HTTP(S) (i.e. when it

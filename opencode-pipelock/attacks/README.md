@@ -12,11 +12,13 @@ docker compose run --rm agent
 
 # Inside the container, the attacks/ dir is at /workspace/attacks
 cd /workspace/attacks
-sh 01-blocklist.sh      # domain blocklist
-sh 02-dlp.sh            # DLP credential scan
-sh 03-entropy.sh        # entropy threshold
-sh 04-redaction.sh      # scanner visibility + strip mode + attack scorecard
-sh 05-pii-redaction.sh  # PII in MCP responses (credit card, SSN, email)
+sh 01-blocklist.sh    # domain blocklist — blocked by allowlist
+sh 02-dlp.sh          # credential in URL param — blocked by DLP regex
+sh 03-entropy.sh      # base64-encoded blob — blocked by entropy threshold
+sh 04-redaction.sh    # scanner visibility + strip mode + attack scorecard
+sh 05-pii-outbound.sh    # PII in outbound request URL — DLP blocks it (visible in proxy log)
+sh 06-pii-mcp-scan.sh    # PII in MCP tool response — local scanner blocks it
+sh 07-pii-strip-rules.sh # strip mode simulation + adding custom PII patterns
 ```
 
 > **Note:** use `sh scriptname.sh`, not `./scriptname.sh`. The `attacks/` directory
@@ -65,8 +67,10 @@ The MCP injection demo runs via opencode — see the MCP injection demo section 
 | `02-dlp.sh` | DLP regex on plain-HTTP URL params | Trivial — switch to https:// (tunnel hides URL); harder: encode the key |
 | `03-entropy.sh` | Shannon entropy on plain-HTTP URL params | Trivial — switch to https://; harder: chunk or use wordlist encoding |
 | `demo-mcp-server.js` | MCP response injection scanner | Moderate — rephrase payload to evade the regex patterns |
-| `04-redaction.sh` | Scanner visibility, strip vs block, attack scorecard | n/a — visibility demo, not an attack |
-| `05-pii-redaction.sh` | PII in MCP tool responses (credit card, SSN, email) | n/a — visibility + tuning demo |
+| `04-redaction.sh` | Scanner visibility, strip vs block, attack scorecard | n/a — visibility demo |
+| `05-pii-outbound.sh` | PII in outbound URL params — DLP blocks it, visible in proxy log | Switch to https:// (CONNECT tunnel hides URL from DLP) |
+| `06-pii-mcp-scan.sh` | PII in MCP tool response — local scanner catches card, SSN, email | Rephrase or encode PII values to evade the regex |
+| `07-pii-strip-rules.sh` | Strip mode simulation + adding custom PII patterns | n/a — tuning demo |
 
 ## MCP injection demo
 

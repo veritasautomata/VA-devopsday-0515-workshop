@@ -73,12 +73,44 @@ Expected health response:
 {
   "status": "healthy",
   "version": "2.3.0",
-  "mode": "balanced",
+  "mode": "strict",
   "uptime_seconds": 42,
   "dlp_patterns": 51,
   "response_scan_enabled": true
 }
 ```
+
+---
+
+## Proving network isolation (from inside the agent container)
+
+Two-layer isolation check — run both commands from inside the agent container
+(`docker compose run --rm agent`) to prove both walls are up:
+
+```sh
+# Layer 1 — Docker network has no route to the internet.
+# curl uses --noproxy '*' to bypass the HTTPS_PROXY env var and attempt a
+# direct TCP connection. There is no gateway on the internal network, so this
+# times out. This is the network layer doing its job, before pipelock is
+# even involved.
+curl --noproxy '*' -m 5 https://example.com
+# curl: (28) Connection timed out after 5001 ms
+
+# Layer 2 — pipelock enforces the allowlist.
+# Without --noproxy, curl honours HTTPS_PROXY=http://pipelock:8888 and routes
+# through pipelock. example.com is not on the api_allowlist, so pipelock blocks
+# it. (mode: strict means only allowlisted domains get through — mode: balanced
+# would let this pass with just monitoring.)
+curl -m 5 https://example.com
+# 403 Forbidden — not on allowlist
+```
+
+> **Why `curl -m 5 https://example.com` works without `--noproxy`:** the agent
+> container has `HTTPS_PROXY=http://pipelock:8888` in its environment
+> (`docker-compose.yaml`). `curl` respects that env var automatically and routes
+> through pipelock — there is no direct connection attempt. The `--noproxy '*'`
+> flag bypasses the env var so you get a raw TCP connection to the internet,
+> which fails because Docker's internal network has no gateway.
 
 ---
 
@@ -295,17 +327,24 @@ Pipelock can strip or block PII before it reaches the model. The included
 config already covers credit cards, SSNs, and email addresses in both DLP
 (outbound requests) and response scanning (inbound MCP tool responses).
 
-**Run the demo from inside the agent container:**
+**Three focused scripts — run from inside the agent container:**
 
 ```sh
-cd /workspace/attacks && sh 05-pii-redaction.sh
+cd /workspace/attacks
+
+# 05: DLP outbound — PII in a URL param, blocked by proxy, visible in docker logs pipelock
+sh 05-pii-outbound.sh
+
+# 06: MCP response scan — PII in a tool response, blocked locally, output in terminal
+sh 06-pii-mcp-scan.sh
+
+# 07: strip mode + custom rules — redact instead of block, add your own patterns
+sh 07-pii-strip-rules.sh
 ```
 
-The script shows:
-- A fake customer record from a CRM tool containing a credit card, email, and SSN
-- What pipelock's scanner catches (pattern name, matched text, byte position)
-- What the model would receive in `strip` mode (PII redacted, record intact)
-- How to write a custom pattern for any PII type you care about
+- **05** shows PII being caught in an outbound HTTP request. Watch `docker logs -f pipelock | jq --unbuffered 'select(.event == "blocked")'` on the host to see the DLP event.
+- **06** shows a fake CRM tool response with a credit card, email, and SSN being intercepted by the MCP response scanner. Output appears in the agent terminal (the MCP scanner is local, not the network proxy).
+- **07** shows what the model receives in `strip` mode (PII redacted, rest of record intact) and walks through adding a custom regex rule.
 
 **To add your own PII patterns**, edit `pipelock.yaml`:
 
@@ -330,18 +369,20 @@ positives.
 
 ## Hands-on attack scenarios
 
-Six scenarios in `attacks/` demonstrate pipelock's defenses. Run the shell
-scripts from inside the agent container; the MCP demo runs via opencode.
+Seven scenarios in `attacks/` demonstrate pipelock's defenses. Run the shell
+scripts from inside the agent container; the MCP injection demo runs via opencode.
 
 ```sh
 docker compose run --rm agent
 cd /workspace/attacks
 
-sh 01-blocklist.sh   # naive curl to pastebin — blocked by domain list
-sh 02-dlp.sh         # credential in URL param — blocked by DLP regex
-sh 03-entropy.sh     # base64-encoded blob — blocked by entropy threshold
-sh 04-redaction.sh   # scanner visibility, strip vs block, attack scorecard
-sh 05-pii-redaction.sh  # PII in MCP response — credit card, SSN, email caught
+sh 01-blocklist.sh       # naive curl to pastebin — blocked by domain list
+sh 02-dlp.sh             # credential in URL param — blocked by DLP regex
+sh 03-entropy.sh         # base64-encoded blob — blocked by entropy threshold
+sh 04-redaction.sh       # scanner visibility, strip vs block, attack scorecard
+sh 05-pii-outbound.sh    # PII in URL param — DLP blocks it, visible in proxy log
+sh 06-pii-mcp-scan.sh    # PII in MCP response — local scanner, output in terminal
+sh 07-pii-strip-rules.sh # strip mode demo + adding your own PII patterns
 ```
 
 > **Note:** use `sh scriptname.sh`, not `./scriptname.sh`. The `attacks/` directory is
